@@ -108,7 +108,7 @@ def testar_leitura_pdf():
         with urlopen(requisicao, timeout=60) as resposta:
             arquivo.write_bytes(resposta.read())
 
-               resultado = subprocess.run(
+        resultado = subprocess.run(
             ["pdftotext", "-layout", str(arquivo), "-"],
             capture_output=True,
             text=True,
