@@ -82,3 +82,39 @@ def consultar_boletins():
 
 if __name__ == "__main__":
     consultar_boletins()
+
+
+# ETAPA 2 - Teste de leitura do boletim PDF
+
+import subprocess
+import tempfile
+from pathlib import Path
+
+def testar_leitura_pdf():
+    url = (
+        BASE + "/wp-content/uploads/2026/11/"
+        "informativo-balneabilidade-47_2026-enterolert-1.pdf"
+    )
+
+    print("\n=== TESTE DE LEITURA DO PDF ===")
+
+    with tempfile.TemporaryDirectory() as pasta:
+        arquivo = Path(pasta) / "boletim.pdf"
+
+        requisicao = Request(
+            url, headers={"User-Agent": "Mozilla/5.0"}
+        )
+
+        with urlopen(requisicao, timeout=60) as resposta:
+            arquivo.write_bytes(resposta.read())
+
+        subprocess.run(
+            ["pdftotext", "-layout", str(arquivo), "-"],
+            check=True
+        )
+
+    print("\nTeste finalizado.")
+    print("Nenhum dado foi alterado no Supabase.")
+
+if __name__ == "__main__":
+    testar_leitura_pdf()
