@@ -1,0 +1,42 @@
+name: Importar Historico Balneabilidade PE
+
+on:
+  workflow_dispatch:
+    inputs:
+      importar:
+        description: 'Gravar os boletins no Supabase?'
+        required: true
+        default: false
+        type: boolean
+
+permissions:
+  contents: read
+
+concurrency:
+  group: atualizar-balneabilidade
+  cancel-in-progress: false
+
+jobs:
+  importar-historico:
+    runs-on: ubuntu-latest
+    timeout-minutes: 60
+
+    env:
+      SUPABASE_URL: ${{ secrets.SUPABASE_URL }}
+      SUPABASE_SECRET_KEY: ${{ secrets.SUPABASE_SECRET_KEY }}
+      IMPORTAR_HISTORICO: ${{ inputs.importar }}
+
+    steps:
+      - name: Baixar arquivos do repositorio
+        uses: actions/checkout@v4
+
+      - name: Configurar Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: '3.12'
+
+      - name: Instalar leitor de PDF
+        run: sudo apt-get update && sudo apt-get install -y poppler-utils
+
+      - name: Processar historico da CPRH
+        run: python scripts/importar_historico.py
