@@ -1,0 +1,25 @@
+
+name: Atualizar Balneabilidade PE
+
+on:
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  consultar-boletins:
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+
+    steps:
+      - name: Baixar arquivos do repositorio
+        uses: actions/checkout@v4
+
+      - name: Configurar Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: '3.12'
+
+      - name: Consultar boletins da CPRH
+        run: python scripts/atualizar_balneabilidade.py
