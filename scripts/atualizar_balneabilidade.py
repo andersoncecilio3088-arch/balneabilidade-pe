@@ -120,7 +120,18 @@ def testar_leitura_pdf():
         print("Quantidade de caracteres:", len(texto.strip()))
 
         if texto.strip():
-            print(texto)
+            pontos = re.findall(
+                r"^\s*([A-Z]{3}-\d{2,3})\s+.*?\s+(Imprópria|Própria)\s*$",
+                texto,
+                re.MULTILINE
+            )
+
+            print("\n=== RESULTADOS EXTRAIDOS ===")
+
+            for codigo, classificacao in pontos:
+                print(codigo, "-", classificacao)
+
+            print("Total de pontos:", len(pontos))
         else:
             print("PDF sem texto extraivel. Necessario investigar OCR.")
 
