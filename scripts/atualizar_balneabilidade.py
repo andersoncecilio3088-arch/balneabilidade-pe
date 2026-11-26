@@ -108,10 +108,21 @@ def testar_leitura_pdf():
         with urlopen(requisicao, timeout=60) as resposta:
             arquivo.write_bytes(resposta.read())
 
-        subprocess.run(
+               resultado = subprocess.run(
             ["pdftotext", "-layout", str(arquivo), "-"],
+            capture_output=True,
+            text=True,
             check=True
         )
+
+        texto = resultado.stdout
+
+        print("Quantidade de caracteres:", len(texto.strip()))
+
+        if texto.strip():
+            print(texto)
+        else:
+            print("PDF sem texto extraivel. Necessario investigar OCR.")
 
     print("\nTeste finalizado.")
     print("Nenhum dado foi alterado no Supabase.")
