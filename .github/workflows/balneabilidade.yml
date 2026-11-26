@@ -2,14 +2,20 @@ name: Atualizar Balneabilidade PE
 
 on:
   workflow_dispatch:
+  schedule:
+    - cron: '0 11,15,19,23 * * *'
 
 permissions:
   contents: read
 
+concurrency:
+  group: atualizar-balneabilidade
+  cancel-in-progress: false
+
 jobs:
   consultar-boletins:
     runs-on: ubuntu-latest
-    timeout-minutes: 10
+    timeout-minutes: 20
 
     env:
       SUPABASE_URL: ${{ secrets.SUPABASE_URL }}
@@ -26,29 +32,6 @@ jobs:
 
       - name: Instalar leitor de PDF
         run: sudo apt-get update && sudo apt-get install -y poppler-utils
-
-      - name: Testar conexao com Supabase
-        run: |
-          python - <<'PY'
-          import os
-          import json
-          from urllib.request import Request, urlopen
-
-          url = os.environ["SUPABASE_URL"].rstrip("/")
-          chave = os.environ["SUPABASE_SECRET_KEY"]
-
-          requisicao = Request(
-              url + "/rest/v1/pontos_coleta?select=id,codigo",
-              headers={"apikey": chave}
-          )
-
-          with urlopen(requisicao, timeout=30) as resposta:
-              dados = json.loads(resposta.read())
-
-          print("Conexao com Supabase realizada com sucesso!")
-          print("Pontos cadastrados:", len(dados))
-          print("Nenhum dado foi alterado.")
-          PY
 
       - name: Consultar boletins da CPRH
         run: python scripts/atualizar_balneabilidade.py
