@@ -1,18 +1,24 @@
-
+import os
 import re
+import json
+import subprocess
+import tempfile
+from datetime import datetime
+from pathlib import Path
+from html.parser import HTMLParser
 from urllib.request import Request, urlopen
 from urllib.parse import urljoin, urlparse
-from html.parser import HTMLParser
-
-# BALNEABILIDADE PE
-# Etapa inicial: localizar boletins oficiais da CPRH
 
 BASE = "https://www2.cprh.pe.gov.br"
+ANO = datetime.now().year
 
 PAGINAS = [
     BASE + "/monitoramento-ambiental/balneabilidade/",
-    BASE + "/monitoramento-ambiental/balneabilidade/informativos-semanais-2026/"
+    BASE + f"/monitoramento-ambiental/balneabilidade/informativos-semanais-{ANO}/"
 ]
+
+SUPABASE_URL = os.environ.get("SUPABASE_URL", "").rstrip("/")
+SUPABASE_KEY = os.environ.get("SUPABASE_SECRET_KEY", "")
 
 
 class LeitorLinks(HTMLParser):
@@ -27,86 +33,66 @@ class LeitorLinks(HTMLParser):
                 self.links.append(link)
 
 
-def consultar_boletins():
+def baixar(url):
+    requisicao = Request(
+        url,
+        headers={"User-Agent": "Mozilla/5.0"}
+    )
+    with urlopen(requisicao, timeout=60) as resposta:
+        return resposta.read()
+
+
+def localizar_boletim():
     boletins = set()
 
     for pagina in PAGINAS:
-        print(f"Consultando: {pagina}")
-
-        requisicao = Request(
-            pagina,
-            headers={"User-Agent": "BalneabilidadePE/1.0"}
-        )
-
-        with urlopen(requisicao, timeout=60) as resposta:
-            html = resposta.read().decode(
-                "utf-8", errors="replace"
-            )
+        print("Consultando:", pagina)
 
         leitor = LeitorLinks()
-        leitor.feed(html)
+        leitor.feed(baixar(pagina).decode("utf-8", errors="replace"))
 
         for link in leitor.links:
             url = urljoin(pagina, link)
-            partes = urlparse(url)
-            caminho = partes.path.lower()
+            caminho = urlparse(url).path
 
-            if partes.hostname not in (
-                "www2.cprh.pe.gov.br",
-                "www.cprh.pe.gov.br",
-                "cprh.pe.gov.br"
-            ):
+            if urlparse(url).hostname != urlparse(BASE).hostname:
                 continue
 
-            if (
-                caminho.endswith(".pdf")
-                and "balneabilidade" in caminho
-                and "informativo" in caminho
-            ):
-                boletins.add(url)
+            if not caminho.lower().endswith(".pdf"):
+                continue
+
+            dados = re.search(
+                r"balneabilidade[-_\s]+(\d+)[-_\s]+(\d{4})",
+                caminho,
+                re.IGNORECASE
+            )
+
+            if dados:
+                numero = int(dados.group(1))
+                ano = int(dados.group(2))
+                boletins.add((ano, numero, url))
 
     if not boletins:
-        raise RuntimeError(
-            "Nenhum boletim localizado. "
-            "Verifique a pagina oficial da CPRH."
-        )
+        raise RuntimeError("Nenhum boletim localizado.")
 
-    print(f"\nBoletins encontrados: {len(boletins)}")
+    ano, numero = max((a, n) for a, n, u in boletins)
+    urls = sorted(u for a, n, u in boletins if (a, n) == (ano, numero))
 
-    for boletim in sorted(boletins):
-        print(boletim)
+    if len(urls) != 1:
+        raise RuntimeError("Mais de um PDF para o boletim mais recente.")
 
-    print("\nConsulta finalizada.")
-    print("Nenhum dado foi alterado no Supabase.")
+    url = urls[0]
 
+    print("Boletim mais recente:", numero, "/", ano)
+    print("PDF:", url)
 
-if __name__ == "__main__":
-    consultar_boletins()
+    return ano, numero, url
 
 
-# ETAPA 2 - Teste de leitura do boletim PDF
-
-import subprocess
-import tempfile
-from pathlib import Path
-
-def testar_leitura_pdf():
-    url = (
-        BASE + "/wp-content/uploads/2026/11/"
-        "informativo-balneabilidade-47_2026-enterolert-1.pdf"
-    )
-
-    print("\n=== TESTE DE LEITURA DO PDF ===")
-
+def ler_pdf(url):
     with tempfile.TemporaryDirectory() as pasta:
         arquivo = Path(pasta) / "boletim.pdf"
-
-        requisicao = Request(
-            url, headers={"User-Agent": "Mozilla/5.0"}
-        )
-
-        with urlopen(requisicao, timeout=60) as resposta:
-            arquivo.write_bytes(resposta.read())
+        arquivo.write_bytes(baixar(url))
 
         resultado = subprocess.run(
             ["pdftotext", "-layout", str(arquivo), "-"],
@@ -115,28 +101,146 @@ def testar_leitura_pdf():
             check=True
         )
 
-        texto = resultado.stdout
+        return resultado.stdout
 
-        print("Quantidade de caracteres:", len(texto.strip()))
 
-        if texto.strip():
-            pontos = re.findall(
-                r"^\s*([A-Z]{3}-\d{2,3})\s+.*?\s+(Imprópria|Própria)\s*$",
-                texto,
-                re.MULTILINE
+def converter_data(data):
+    return datetime.strptime(
+        data, "%d/%m/%Y"
+    ).strftime("%Y-%m-%d")
+
+
+def extrair_dados(texto):
+    periodo = re.search(
+        r"PER[ÍI]ODO:\s*(\d{2}/\d{2}/\d{4})\s*a\s*(\d{2}/\d{2}/\d{4})",
+        texto,
+        re.IGNORECASE
+    )
+
+    coleta = re.search(
+        r"DATA DA COLETA:\s*(\d{2}/\d{2}/\d{4})",
+        texto,
+        re.IGNORECASE
+    )
+
+    publicacao = re.search(
+        r"^\s*DATA:\s*(\d{2}/\d{2}/\d{4})",
+        texto,
+        re.MULTILINE
+    )
+
+    if not periodo or not coleta or not publicacao:
+        raise RuntimeError("Nao foi possivel identificar todas as datas.")
+
+    pontos = re.findall(
+        r"^[ \t]*([A-Z]{3}-\d{2,3})[ \t]+.*?[ \t]+(Imprópria|Própria)[ \t]*$",
+        texto,
+        re.MULTILINE
+    )
+
+    resultados = []
+
+    for codigo, classificacao in pontos:
+        resultados.append({
+            "codigo": codigo,
+            "classificacao": (
+                "IMPROPRIA"
+                if classificacao == "Imprópria"
+                else "PROPRIA"
             )
+        })
 
-            print("\n=== RESULTADOS EXTRAIDOS ===")
+    return {
+        "data_publicacao": converter_data(publicacao.group(1)),
+        "inicio_validade": converter_data(periodo.group(1)),
+        "fim_validade": converter_data(periodo.group(2)),
+        "data_coleta": converter_data(coleta.group(1)),
+        "resultados": resultados
+    }
 
-            for codigo, classificacao in pontos:
-                print(codigo, "-", classificacao)
 
-            print("Total de pontos:", len(pontos))
-        else:
-            print("PDF sem texto extraivel. Necessario investigar OCR.")
+def consultar_supabase(tabela, consulta):
+    if not SUPABASE_URL or not SUPABASE_KEY:
+        raise RuntimeError("Credenciais do Supabase ausentes.")
 
-    print("\nTeste finalizado.")
+    url = f"{SUPABASE_URL}/rest/v1/{tabela}?{consulta}"
+
+    headers = {
+        "apikey": SUPABASE_KEY,
+        "Accept": "application/json"
+    }
+
+    if SUPABASE_KEY.startswith("eyJ"):
+        headers["Authorization"] = f"Bearer {SUPABASE_KEY}"
+
+    requisicao = Request(url, headers=headers)
+
+    with urlopen(requisicao, timeout=60) as resposta:
+        return json.loads(resposta.read())
+
+
+def main():
+    print("=== BALNEABILIDADE PE ===")
+
+    ano, numero, url = localizar_boletim()
+    texto = ler_pdf(url)
+    dados = extrair_dados(texto)
+
+    resultados = dados["resultados"]
+
+    print("\n=== DADOS DO BOLETIM ===")
+    print("Numero:", numero)
+    print("Ano:", ano)
+    print("Publicacao:", dados["data_publicacao"])
+    print("Inicio:", dados["inicio_validade"])
+    print("Fim:", dados["fim_validade"])
+    print("Coleta:", dados["data_coleta"])
+    print("Total de pontos:", len(resultados))
+
+    pontos = consultar_supabase(
+        "pontos_coleta",
+        "select=id,codigo&ativo=eq.true"
+    )
+
+    mapa = {
+        ponto["codigo"]: ponto["id"]
+        for ponto in pontos
+    }
+
+    codigos = [r["codigo"] for r in resultados]
+
+    if len(codigos) != len(set(codigos)):
+        raise RuntimeError("Codigos duplicados no PDF.")
+
+    if not codigos or set(codigos) != set(mapa):
+        raise RuntimeError("Divergencia entre PDF e pontos cadastrados.")
+
+    print("\n=== VALIDACAO DOS PONTOS ===")
+
+    for resultado in resultados:
+        codigo = resultado["codigo"]
+        print(
+            codigo,
+            "| ID:", mapa[codigo],
+            "|", resultado["classificacao"]
+        )
+
+    boletins = consultar_supabase(
+        "boletins",
+        f"select=id,numero,ano&numero=eq.{numero}&ano=eq.{ano}"
+    )
+
+    print("\n=== SITUACAO DO BANCO ===")
+
+    if boletins:
+        print("Boletim ja cadastrado.")
+        print("ID:", boletins[0]["id"])
+    else:
+        print("Novo boletim identificado.")
+
+    print("\nValidacao concluida com sucesso.")
     print("Nenhum dado foi alterado no Supabase.")
 
+
 if __name__ == "__main__":
-    testar_leitura_pdf()
+    main()
