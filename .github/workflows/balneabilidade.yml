@@ -3,7 +3,7 @@ name: Atualizar Balneabilidade PE
 on:
   workflow_dispatch:
   schedule:
-    - cron: '0 11,15,19,23 * * *'
+    - cron: '15 9,11,13,15,17,19,21,23 * * *'
 
 permissions:
   contents: read
