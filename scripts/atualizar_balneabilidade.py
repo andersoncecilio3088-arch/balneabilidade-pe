@@ -14,35 +14,22 @@ from urllib.error import URLError, HTTPError
 from zoneinfo import ZoneInfo
 
 
-# ==========================================
 # CONFIGURACOES
-# ==========================================
 
 BASE = "https://www2.cprh.pe.gov.br"
-
-ANO = datetime.now(
-    ZoneInfo("America/Recife")
-).year
+ANO = datetime.now(ZoneInfo("America/Recife")).year
 
 PAGINAS = [
     BASE + "/monitoramento-ambiental/balneabilidade/",
     BASE + f"/monitoramento-ambiental/balneabilidade/informativos-semanais-{ANO}/"
 ]
 
-SUPABASE_URL = os.environ.get(
-    "SUPABASE_URL", ""
-).rstrip("/")
-
-SUPABASE_KEY = os.environ.get(
-    "SUPABASE_SECRET_KEY", ""
-)
-
+SUPABASE_URL = os.environ.get("SUPABASE_URL", "").rstrip("/")
+SUPABASE_KEY = os.environ.get("SUPABASE_SECRET_KEY", "")
 TENTATIVAS = 5
 
 
-# ==========================================
 # LEITURA DOS LINKS
-# ==========================================
 
 class LeitorLinks(HTMLParser):
 
@@ -53,14 +40,11 @@ class LeitorLinks(HTMLParser):
     def handle_starttag(self, tag, attrs):
         if tag == "a":
             link = dict(attrs).get("href")
-
             if link:
                 self.links.append(link)
 
 
-# ==========================================
-# DOWNLOAD COM RECONEXAO
-# ==========================================
+# DOWNLOAD
 
 def baixar(url):
 
@@ -69,53 +53,33 @@ def baixar(url):
         try:
             requisicao = Request(
                 url,
-                headers={
-                    "User-Agent": "Mozilla/5.0"
-                }
+                headers={"User-Agent": "Mozilla/5.0"}
             )
 
-            with urlopen(
-                requisicao,
-                timeout=30
-            ) as resposta:
-
+            with urlopen(requisicao, timeout=30) as resposta:
                 return resposta.read()
 
         except HTTPError as erro:
 
-            if erro.code not in (
-                408, 429, 500, 502, 503, 504
-            ):
+            if erro.code not in (408, 429, 500, 502, 503, 504):
                 raise
-
-            print(
-                f"Tentativa {tentativa}: {erro}"
-            )
 
             if tentativa == TENTATIVAS:
                 raise
+
+            print("Falha temporaria:", erro)
 
         except (URLError, OSError) as erro:
 
-            print(
-                f"Tentativa {tentativa}: {erro}"
-            )
-
             if tentativa == TENTATIVAS:
                 raise
 
-        espera = tentativa * 5
+            print("Falha de conexao:", erro)
 
-        print(
-            f"Nova tentativa em {espera} segundos."
-        )
-
-        time.sleep(espera)
+        time.sleep(tentativa * 5)
 
 
-# ==========================================
-# LOCALIZAR BOLETIM MAIS RECENTE
-# ==========================================
+# LOCALIZAR BOLETIM
 
 def localizar_boletim():
 
@@ -126,12 +90,8 @@ def localizar_boletim():
         print("Consultando:", pagina)
 
         leitor = LeitorLinks()
-
         leitor.feed(
-            baixar(pagina).decode(
-                "utf-8",
-                errors="replace"
-            )
+            baixar(pagina).decode("utf-8", errors="replace")
         )
 
         for link in leitor.links:
@@ -152,18 +112,14 @@ def localizar_boletim():
             )
 
             if dados:
-
-                numero = int(dados.group(1))
-                ano = int(dados.group(2))
-
-                boletins.add(
-                    (ano, numero, url)
-                )
+                boletins.add((
+                    int(dados.group(2)),
+                    int(dados.group(1)),
+                    url
+                ))
 
     if not boletins:
-        raise RuntimeError(
-            "Nenhum boletim localizado."
-        )
+        raise RuntimeError("Nenhum boletim localizado.")
 
     ano, numero = max(
         (a, n) for a, n, u in boletins
@@ -187,48 +143,34 @@ def localizar_boletim():
     return ano, numero, url
 
 
-# ==========================================
 # LEITURA DO PDF
-# ==========================================
 
 def ler_pdf(url):
 
     with tempfile.TemporaryDirectory() as pasta:
 
         arquivo = Path(pasta) / "boletim.pdf"
-
         conteudo = baixar(url)
 
         if not conteudo.startswith(b"%PDF-"):
-            raise RuntimeError(
-                "O arquivo recebido nao e um PDF valido."
-            )
+            raise RuntimeError("PDF invalido.")
 
         arquivo.write_bytes(conteudo)
 
         resultado = subprocess.run(
-            [
-                "pdftotext",
-                "-layout",
-                str(arquivo),
-                "-"
-            ],
+            ["pdftotext", "-layout", str(arquivo), "-"],
             capture_output=True,
             text=True,
             check=True
         )
 
         if not resultado.stdout.strip():
-            raise RuntimeError(
-                "PDF sem texto extraivel."
-            )
+            raise RuntimeError("PDF sem texto extraivel.")
 
         return resultado.stdout
 
 
-# ==========================================
-# CONVERSAO DAS DATAS
-# ==========================================
+# CONVERSAO DE DATAS
 
 def converter_data(data):
 
@@ -238,9 +180,8 @@ def converter_data(data):
     ).strftime("%Y-%m-%d")
 
 
-# ==========================================
 # EXTRACAO DOS DADOS
-# ==========================================
+# ACEITA COLETAS EM UM OU DOIS DIAS
 
 def extrair_dados(texto):
 
@@ -251,22 +192,36 @@ def extrair_dados(texto):
     )
 
     coleta = re.search(
-        r"DATA DA COLETA:\s*(\d{2}/\d{2}/\d{4})",
+        r"DATA DA COLETA:[ \t]*(?:(\d{1,2})[ \t]+e[ \t]+)?(\d{2}/\d{2}/\d{4})[ \t]*$",
         texto,
-        re.IGNORECASE
+        re.IGNORECASE | re.MULTILINE
     )
 
     publicacao = re.search(
         r"^\s*DATA:\s*(\d{2}/\d{2}/\d{4})",
         texto,
-        re.MULTILINE
+        re.MULTILINE | re.IGNORECASE
     )
 
     if not periodo or not coleta or not publicacao:
-
         raise RuntimeError(
             "Nao foi possivel identificar todas as datas."
         )
+
+    if coleta.group(1):
+
+        primeira = (
+            coleta.group(1).zfill(2)
+            + coleta.group(2)[2:]
+        )
+
+        if converter_data(primeira) >= converter_data(coleta.group(2)):
+            raise RuntimeError("Datas de coleta inconsistentes.")
+
+        print("ATENCAO: coleta em dois dias.")
+        print("Primeira data:", primeira)
+        print("Ultima data:", coleta.group(2))
+        print("Ultima data utilizada apenas como referencia.")
 
     pontos = re.findall(
         r"^[ \t]*([A-Z]{3}-\d{2,3})[ \t]+.*?[ \t]+(Imprópria|Própria)[ \t]*$",
@@ -288,18 +243,10 @@ def extrair_dados(texto):
         })
 
     dados = {
-        "data_publicacao": converter_data(
-            publicacao.group(1)
-        ),
-        "inicio_validade": converter_data(
-            periodo.group(1)
-        ),
-        "fim_validade": converter_data(
-            periodo.group(2)
-        ),
-        "data_coleta": converter_data(
-            coleta.group(1)
-        ),
+        "data_publicacao": converter_data(publicacao.group(1)),
+        "inicio_validade": converter_data(periodo.group(1)),
+        "fim_validade": converter_data(periodo.group(2)),
+        "data_coleta": converter_data(coleta.group(2)),
         "resultados": resultados
     }
 
@@ -309,16 +256,12 @@ def extrair_dados(texto):
         <= dados["inicio_validade"]
         <= dados["fim_validade"]
     ):
-        raise RuntimeError(
-            "Datas do boletim inconsistentes."
-        )
+        raise RuntimeError("Datas do boletim inconsistentes.")
 
     return dados
 
 
-# ==========================================
 # COMUNICACAO COM SUPABASE
-# ==========================================
 
 def supabase(
     tabela,
@@ -329,10 +272,7 @@ def supabase(
 ):
 
     if not SUPABASE_URL or not SUPABASE_KEY:
-
-        raise RuntimeError(
-            "Credenciais do Supabase ausentes."
-        )
+        raise RuntimeError("Credenciais do Supabase ausentes.")
 
     url = f"{SUPABASE_URL}/rest/v1/{tabela}"
 
@@ -346,10 +286,7 @@ def supabase(
     }
 
     if SUPABASE_KEY.startswith("eyJ"):
-
-        headers["Authorization"] = (
-            f"Bearer {SUPABASE_KEY}"
-        )
+        headers["Authorization"] = f"Bearer {SUPABASE_KEY}"
 
     if prefer:
         headers["Prefer"] = prefer
@@ -357,7 +294,6 @@ def supabase(
     corpo = None
 
     if dados is not None:
-
         corpo = json.dumps(
             dados,
             ensure_ascii=False
@@ -372,10 +308,7 @@ def supabase(
 
     try:
 
-        with urlopen(
-            requisicao,
-            timeout=60
-        ) as resposta:
+        with urlopen(requisicao, timeout=60) as resposta:
 
             conteudo = resposta.read()
 
@@ -396,10 +329,6 @@ def supabase(
         ) from erro
 
 
-# ==========================================
-# CONSULTAR SUPABASE
-# ==========================================
-
 def consultar_supabase(tabela, consulta):
 
     return supabase(
@@ -408,9 +337,7 @@ def consultar_supabase(tabela, consulta):
     )
 
 
-# ==========================================
 # CADASTRAR BOLETIM
-# ==========================================
 
 def cadastrar_boletim(ano, numero, url, dados):
 
@@ -429,10 +356,7 @@ def cadastrar_boletim(ano, numero, url, dados):
         consulta="on_conflict=numero,ano",
         metodo="POST",
         dados=registro,
-        prefer=(
-            "resolution=ignore-duplicates,"
-            "return=minimal"
-        )
+        prefer="resolution=ignore-duplicates,return=minimal"
     )
 
     boletins = consultar_supabase(
@@ -441,17 +365,12 @@ def cadastrar_boletim(ano, numero, url, dados):
     )
 
     if len(boletins) != 1:
-
-        raise RuntimeError(
-            "Falha ao localizar o boletim cadastrado."
-        )
+        raise RuntimeError("Falha ao localizar boletim cadastrado.")
 
     return boletins[0]
 
 
-# ==========================================
 # CADASTRAR RESULTADOS
-# ==========================================
 
 def cadastrar_resultados(
     boletim_id,
@@ -476,21 +395,13 @@ def cadastrar_resultados(
         consulta="on_conflict=boletim_id,ponto_id",
         metodo="POST",
         dados=registros,
-        prefer=(
-            "resolution=ignore-duplicates,"
-            "return=minimal"
-        )
+        prefer="resolution=ignore-duplicates,return=minimal"
     )
 
-    print(
-        "Resultados enviados:",
-        len(registros)
-    )
+    print("Resultados enviados:", len(registros))
 
 
-# ==========================================
-# VALIDAR RESULTADOS GRAVADOS
-# ==========================================
+# VALIDAR RESULTADOS
 
 def validar_resultados(
     boletim_id,
@@ -526,21 +437,15 @@ def validar_resultados(
         encontrados != esperados
         or len(gravados) != len(resultados)
     ):
-
         raise RuntimeError(
             "Divergencia nos resultados gravados. "
             "Publicacao interrompida."
         )
 
-    print(
-        "Resultados confirmados:",
-        len(gravados)
-    )
+    print("Resultados confirmados:", len(gravados))
 
 
-# ==========================================
 # PUBLICAR BOLETIM
-# ==========================================
 
 def publicar_boletim(boletim_id):
 
@@ -548,9 +453,7 @@ def publicar_boletim(boletim_id):
         "boletins",
         consulta=f"id=eq.{boletim_id}",
         metodo="PATCH",
-        dados={
-            "publicado": True
-        },
+        dados={"publicado": True},
         prefer="return=minimal"
     )
 
@@ -563,16 +466,12 @@ def publicar_boletim(boletim_id):
         len(confirmacao) != 1
         or not confirmacao[0]["publicado"]
     ):
-        raise RuntimeError(
-            "Nao foi possivel confirmar a publicacao."
-        )
+        raise RuntimeError("Falha ao confirmar publicacao.")
 
     print("Boletim publicado com sucesso!")
 
 
-# ==========================================
 # EXECUCAO PRINCIPAL
-# ==========================================
 
 def main():
 
@@ -581,9 +480,7 @@ def main():
     ano, numero, url = localizar_boletim()
 
     texto = ler_pdf(url)
-
     dados = extrair_dados(texto)
-
     resultados = dados["resultados"]
 
     print("\n=== DADOS DO BOLETIM ===")
@@ -607,15 +504,11 @@ def main():
     }
 
     codigos = [
-        r["codigo"]
-        for r in resultados
+        r["codigo"] for r in resultados
     ]
 
     if len(codigos) != len(set(codigos)):
-
-        raise RuntimeError(
-            "Codigos duplicados no PDF."
-        )
+        raise RuntimeError("Codigos duplicados no PDF.")
 
     if not codigos or set(codigos) != set(mapa):
 
@@ -650,16 +543,15 @@ def main():
         f"select=*&numero=eq.{numero}&ano=eq.{ano}"
     )
 
-    print("\n=== SITUACAO DO BANCO ===")
-
     if boletins:
 
-        boletim = boletins[0]
+        if len(boletins) != 1:
+            raise RuntimeError("Boletins duplicados.")
 
+        boletim = boletins[0]
         boletim_id = boletim["id"]
 
         print("Boletim ja cadastrado.")
-        print("ID:", boletim_id)
 
         for campo in (
             "data_publicacao",
@@ -668,7 +560,6 @@ def main():
         ):
 
             if boletim[campo] != dados[campo]:
-
                 raise RuntimeError(
                     f"Divergencia no campo {campo}."
                 )
@@ -684,8 +575,7 @@ def main():
 
             print("Boletim ja publicado.")
             print("Nenhum registro duplicado.")
-            print("Nenhum dado foi alterado.")
-            print("\nProcesso concluido com sucesso.")
+            print("Processo concluido com sucesso.")
 
             return
 
@@ -703,8 +593,6 @@ def main():
         )
 
         boletim_id = boletim["id"]
-
-        print("ID do boletim:", boletim_id)
 
     print("\n=== GRAVACAO DOS RESULTADOS ===")
 
@@ -737,13 +625,11 @@ def main():
     )
 
     print("\n=== RESUMO FINAL ===")
-
     print("Boletim:", numero, "/", ano)
     print("Total de pontos:", len(resultados))
     print("Proprios:", proprios)
     print("Improprios:", improprios)
-
-    print("\nProcesso concluido com sucesso.")
+    print("Processo concluido com sucesso.")
 
 
 if __name__ == "__main__":
